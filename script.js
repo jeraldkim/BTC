@@ -2,8 +2,11 @@
 const BITCOIN_GROWTH_RATE = 0.5; // 50% annual growth (simplified)
 const GOLD_GROWTH_RATE = 0.05; // 5% annual growth (simplified)
 const SECONDS_PER_YEAR = 31536000;
-const CORS_PROXY = 'https://cors-anywhere.herokuapp.com/'; // Free CORS proxy
+const CORS_PROXY = 'https://api.allorigins.win/raw?url='; // Alternative proxy
 const TARGET_URL = 'https://companiesmarketcap.com/assets-by-market-cap/';
+
+// Cache for fallback data
+let lastData = { goldCap: null, bitcoinCap: null };
 
 // DOM Elements
 const goldCapElement = document.getElementById('gold-cap');
@@ -31,11 +34,12 @@ function parseCap(cap) {
 // Scrape data
 async function scrapeData() {
     try {
-        const response = await fetch(CORS_PROXY + TARGET_URL, {
+        const response = await fetch(CORS_PROXY + encodeURIComponent(TARGET_URL), {
             headers: {
-                'X-Requested-With': 'XMLHttpRequest'
+                'Accept': 'text/html'
             }
         });
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
         const html = await response.text();
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
@@ -44,7 +48,8 @@ async function scrapeData() {
         let bitcoinCap = null;
 
         for (const row of rows) {
-            const name = row.querySelector('td:nth-child(2) a')?.innerText?.toLowerCase();
+            const nameElement = row.querySelector('td:nth-child(2) .company-name, td:nth-child(2) a');
+            const name = nameElement?.innerText?.toLowerCase();
             const marketCap = row.querySelector('td:nth-child(3)')?.innerText;
 
             if (name?.includes('gold')) {
@@ -56,13 +61,20 @@ async function scrapeData() {
             if (goldCap && bitcoinCap) break;
         }
 
-        return {
+        const data = {
             goldCap: parseCap(goldCap),
             bitcoinCap: parseCap(bitcoinCap)
         };
+
+        // Update cache if data is valid
+        if (data.goldCap && data.bitcoinCap) {
+            lastData = data;
+        }
+
+        return data;
     } catch (error) {
-        console.error('Scraping error:', error);
-        return { goldCap: null, bitcoinCap: null };
+        console.error('Scraping error:', error.message);
+        return lastData; // Return cached data as fallback
     }
 }
 
@@ -110,20 +122,20 @@ async function updateData() {
     if (data.goldCap) {
         goldCapElement.textContent = formatUSD(data.goldCap);
     } else {
-        goldCapElement.textContent = 'Error fetching data';
+        goldCapElement.textContent = lastData.goldCap ? formatUSD(lastData.goldCap) + ' (cached)' : 'Error fetching data';
     }
 
     if (data.bitcoinCap) {
         bitcoinCapElement.textContent = formatUSD(data.bitcoinCap);
     } else {
-        bitcoinCapElement.textContent = 'Error fetching data';
+        bitcoinCapElement.textContent = lastData.bitcoinCap ? formatUSD(lastData.bitcoinCap) + ' (cached)' : 'Error fetching data';
     }
 
     if (data.goldCap && data.bitcoinCap) {
         const time = calculateTimeToOvertake(data.goldCap, data.bitcoinCap);
         countdownElement.textContent = formatCountdown(time);
     } else {
-        countdownElement.textContent = 'Error';
+        countdownElement.textContent = lastData.goldCap && lastData.bitcoinCap ? formatCountdown(calculateTimeToOvertake(lastData.goldCap, lastData.bitcoinCap)) : 'Error';
     }
 }
 
@@ -134,7 +146,7 @@ const interval = setInterval(() => {
         // Stop interval if Bitcoin overtakes Gold
         if (bitcoinCapElement.textContent !== 'Loading...' &&
             goldCapElement.textContent !== 'Loading...' &&
-            bitcoinCapElement.textContent !== 'Error fetching data' &&
+            !bitcoinCapElement.textContent.includes('Error') &&
             parseFloat(bitcoinCapElement.textContent.replace(/[^0-9.]/g, '')) >=
             parseFloat(goldCapElement.textContent.replace(/[^0-9.]/g, ''))) {
             clearInterval(interval);
